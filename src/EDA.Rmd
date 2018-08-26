@@ -43,7 +43,7 @@ ggplotly(plot_correlation(bank, maxcat = 5L, use = "pairwise.complete.obs"))
 ```
 
 ```{r}
-create_report(bank)
+create_report(bank, output_dir = '..\\results')
 ```
 
 ```{r}
