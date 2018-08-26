@@ -1,0 +1,116 @@
+---
+title: "Finanzas - EDA"
+author: "Fernando Menendez"
+date: "August 17, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DataExplorer)
+library(ggplot2)
+library(plotly)
+library(dplyr) 
+```
+
+
+```{r}
+bank<-read.delim("..\\data\\201802.txt",header = T)
+head(bank)
+```
+
+```{r}
+introduce(bank)
+```
+
+```{r}
+plot_missing(bank[,1:30],theme_config = list(legend.position = c("bottom")))
+plot_missing(bank[,31:60],theme_config = list(legend.position = c("bottom")))
+plot_missing(bank[,61:90],theme_config = list(legend.position = c("bottom")))
+plot_missing(bank[,91:110],theme_config = list(legend.position = c("bottom")))
+plot_missing(bank[,111:140],theme_config = list(legend.position = c("bottom")))
+plot_missing(bank[,141:ncol(bank)],theme_config = list(legend.position = c("bottom")))
+```
+
+```{r}
+plot_histogram(bank)
+```
+
+
+
+```{r}
+ggplotly(plot_correlation(bank, maxcat = 5L, use = "pairwise.complete.obs"))
+```
+
+```{r}
+create_report(bank)
+```
+
+```{r}
+bank.cor<-cor(select(bank,-clase_ternaria), use = "pairwise.complete.obs")
+```
+
+
+```{r}
+trace1 <- list(
+#  z = bank.cor, 
+  colorscale = list(c(0, "rgb(0,0,255)"),list(0.1, "rgb(51,153,255)"),list(0.2, "rgb(102,204,255)"),list(0.3, "rgb(153,204,255)"),list(0.4, "rgb(204,204,255)"),list(0.5, "rgb(255,255,255)"),list(0.6, "rgb(255,204,255)"),list(0.7, "rgb(255,153,255)"),list(0.8, "rgb(255,102,204)"),list(0.9, "rgb(255,102,102)"),list(1, "rgb(255,0,0)")), 
+  name = "trace 0", 
+  type = "heatmap", 
+  uid = "bf4666", 
+  zmax = 1, 
+  zmin = -1
+)
+data <- list(trace1)
+layout <- list(
+  autosize = FALSE, 
+  height = 800, 
+  margin = list(
+    r = 100, 
+    t = 60, 
+    b = 200, 
+    l = 200, 
+    pad = 2
+  ), 
+  showlegend = FALSE, 
+  title = "Correlation Matrix", 
+  width = 1000, 
+  xaxis = list(
+    autorange = TRUE, 
+    linecolor = "rgb(207, 226, 243)", 
+    linewidth = 8, 
+    mirror = TRUE, 
+    nticks = 13, 
+    range = c(-0.5, 19.5), 
+    showline = TRUE, 
+    title = "", 
+    type = "linear"
+  ), 
+  yaxis = list(
+    autorange = TRUE, 
+    linecolor = "rgb(207, 226, 243)", 
+    linewidth = 8, 
+    mirror = TRUE, 
+    nticks = 13, 
+    range = c(-0.5, 19.5), 
+    showline = TRUE, 
+    title = "", 
+    type = "linear"
+  )
+)
+p <- plot_ly(height=layout$height, showlegend=layout$showlegend,  width=layout$width, xaxis=layout$xaxis, yaxis=layout$yaxis) %>% layout(margin=layout$margin,title=layout$title) #,autosize=layout$autosize)
+p <- add_trace(p, z=bank.cor, x=rownames(bank.cor), y=colnames(bank.cor),colorscale=trace1$colorscale, name=trace1$name, type=trace1$type, uid=trace1$uid, zmax=trace1$zmax, zmin=trace1$zmin)
+p
+```
+
+
+
+
+
+
+
+
+
+
+
+
