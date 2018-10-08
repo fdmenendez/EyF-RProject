@@ -1,0 +1,143 @@
+---
+title: "WOE e IV"
+author: "Claudio A. Lupi"
+date: "01 de Octubre de 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Carga de dataset
+```{r}
+rm(list=ls())
+gc()
+
+# Carga de dataset
+dataset <- read.table("201802.txt", header=TRUE, sep="\t", row.names="numero_de_cliente")
+
+# Pasamos a binaria la clase
+dataset$target = dataset$clase_ternaria != "CONTINUA"
+```
+
+## Generalidades
+
+WOE (Weight Of Evidence) e IV (Information Value) son medidas asociadas a una variable que fueron propuestas como postulados de la teoría de la información originada principalmente por Claude Shannon. Lo que intentan medir es el poder predictivo sobre una variable independiente (target) de una variable dependiente (feature).
+
+Tanto el WOE como el IV están relacionadas y se aplican siempre a variables discretas, por lo tanto, si tenemos variables continuas, debemos proceder a discretizarlas.
+
+### WOE: Weight Of Evidence
+
+Supongamos que tenemos una variable discreta con $M$ clases, entonces, para cada clase $i$, el WOE se define como:
+
+$$WOE_i = ln\left(\frac{\text{Distribution of Goods}_i}{\text{Distribution of Bads}_i}\right)$$
+
+Siendo Goods y Bads los 0s y 1s respectivamente y la palabra distribution, hace referencia al porcentaje de 0s y 1s que se tienen del target, dentro de la categoria $i-ésima$ que estamos evaluando. 
+
+Esta definición, se la puede pensar también como:
+
+$$WOE_i = ln(\text{Distribution of Goods}_i)-ln(\text{Distribution of Bads}_i)$$
+
+Lo cual intenta medir de alguna forma, el poder de separación de una variable entre los 0s y 1s.
+
+Posiblemente, no se este entiendo mucho esto, por lo tanto, veamos mejor un ejemplo sobre una variable de nuestro hermoso dataset de la competencia bancaria =).
+
+```{r}
+
+# Discretizamos el rango etario del cliente.
+dataset$rango_etario = NA
+dataset[dataset$cliente_edad < 30, "rango_etario"] <- "18-30"
+dataset[dataset$cliente_edad >= 30 & dataset$cliente_edad < 40, "rango_etario"] <- "31-40"
+dataset[dataset$cliente_edad >= 40 & dataset$cliente_edad < 50, "rango_etario"] <- "41-50"
+dataset[dataset$cliente_edad >= 50 & dataset$cliente_edad < 60, "rango_etario"] <- "51-60"
+dataset[dataset$cliente_edad >= 60, "rango_etario"] <- "60 o más años"
+rangos_etarios <- table(dataset[,c("rango_etario","target")])
+total=apply(rangos_etarios,2,sum)
+rangos_etarios=cbind(rangos_etarios[,1]/total[1],rangos_etarios[,2]/total[2])
+colnames(rangos_etarios) <- c("0s-Goods","1s-Bads")
+rangos_etarios <- as.data.frame.array(rangos_etarios)
+knitr::kable(rangos_etarios)
+```
+
+Entonces, los WOE serían...
+
+```{r}
+rangos_etarios$WOE <- log(rangos_etarios$`0s-Goods`)-log(rangos_etarios$`1s-Bads`)
+knitr::kable(rangos_etarios)
+```
+#### ¿Qué me dice el WOE de cada grupo en esta variable?
+
+### IV: Information Value
+
+Hasta ahora, tenemos una manera de medir el poder de separar entre los 0s y 1s del target para cada grupo de una variable categórica, pero nos falta la manera de vincularla de forma global para dar un único ratio por variable. Esta es la idea del IV, veamos su definición:
+
+$$ IV = \sum_{\forall i} \underbrace{(\text{Distribution of Goods}_i - \text{Distribution of Bads}_i)}_{(\text{DG}_i-\text{DB}_i)} WOE_i=\sum_{\forall i}(\text{DG}_i-\text{DB}_i)WOE_i$$
+De alguna manera, se puede interpretar esta cuenta como un promedio ponderado del grado de separación que tiene una variable dentro de sus categorías.
+
+Volviendo a nuestro Dataset, entonces:
+```{r}
+rangos_etarios$`DG - DB` <- rangos_etarios$`0s-Goods`-rangos_etarios$`1s-Bads`
+knitr::kable(rangos_etarios)
+IV <- sum(rangos_etarios$`DG - DB`*rangos_etarios$WOE)
+knitr::kable(IV)
+```
+
+#### ¿Cómo sabemos si el valor del IV es bueno o malo?
+
+ 
+
+
+En general, para problemas generales, se puede adoptar el siguiente criterio sobre el IV:
+
+```{r echo=FALSE, out.width='50%'}
+knitr::include_graphics('./Categorias de IV.png')
+```
+
+#### Ahora...manos a la obra, veamos el IV de todas las variables y algún temilla mas...
+
+```{r}
+library("Information")
+dataset$target = as.integer(dataset$target)
+IVs <- create_infotables(data=dataset, y="target", bins=10, parallel=FALSE)
+knitr::kable(IVs$Summary)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Estandar
+ds2 <- dataset %>% mutate(mcaja_ahorro_Paquete_bin = as.numeric(cut(mcaja_ahorro_Paquete, breaks=c(quantile(mcaja_ahorro_Paquete, probs = seq(0, 1, by = 0.1)))))) %>%
+    mutate(binaria =
+      case_when(
+        clase_ternaria == "CONTINUA" ~ 0,
+        TRUE ~ 1
+      )
+    )%>%
+    group_by(mcaja_ahorro_Paquete_bin, binaria) %>%
+    count() %>%
+    spread(key=binaria, value=n) %>%
+    mutate(ratio = `1`/(`0`+`1`)) %>%
+    mutate(total = `0`+`1`)
+
+ggplot(ds2, aes(x=mcaja_ahorro_Paquete_bin, y=ratio)) +
+geom_bar(stat="identity", fill="red") + 
+geom_hline(yintercept = 0.005941818, color="black")
+
+# Cómo la ve el IV a la variable
+
+knitr::kable(IVs$Tables$mcaja_ahorro_Paquete)
+plot_infotables(IVs,"mcaja_ahorro_Paquete")
+```
+
+
+### Aplicaciones
+
+Se suelen usar estos conceptos para crear modelos de Scoring Crediticio bajo el nombre de Credit Risk Scorecard. Esta técnica permite, usando IV, crear un modelo que para scorear un individuo superponiendo los efectos de cada variable por separado. Por ej, podríamos decir que si un cliente tiene tarjeta de crédito, esto le suma 50 puntos de score (independientemente de los valores que tengan las otras variables) y a su vez, que si no tiene servicios adheridos al débito automático esta 35 puntos.
+
+Esto tiene PROs y CONTRAs. Como PROs, estos modelos son muy fáciles de explicar, como contras, no suelen tener mejor performance que técnicas mas sofisticadas porque no combinan la interacción entre distintas variables.
+
+### Muchas gracias!

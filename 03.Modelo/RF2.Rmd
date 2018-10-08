@@ -1,0 +1,58 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Veremos la métricas y como podemos optimizarlas.
+
+```{r}
+t0 <- Sys.time()
+fmetricas_binaria(pred_validation$predictions[,"1"],
+                                validation[,"clase_binaria"], tipo = "test", 
+                                etiqueta="febrero_rf", semilla=NA)
+t1 <- Sys.time()
+
+print(as.numeric(  t1 - t0, units = "secs"))
+```
+
+Buscar el máximo punto de corte como función
+
+```{r}
+punto_corte <- function(corte) {
+  return(-fganancia_binaria(pred_validation$predictions[,"1"],
+                                validation[,"clase_binaria"], corte))
+}
+
+punto_corte(0.045)
+```
+```{r}
+length(unique(pred_validation$predictions[,"1"]))
+```
+```{r}
+optimize(punto_corte,c(0.040,0.060), maximum = TRUE)
+
+optim(0.025,punto_corte, method="Nelder-Mead") 
+```
+```{r}
+
+library(dplyr)
+
+data <- cbind(pred_validation$predictions[,"1"],                              validation[,"clase_binaria"])
+
+d2 <- data %>% 
+  mutate(v = ifelse(clase_binaria == 1, 11700, -300), 
+         c1 = ifelse(clase_binaria == 1, 1, 0), 
+         c2 = ifelse(clase_binaria == 1, 0, 1) ) %>% 
+  group_by(V1) %>% 
+  summarise(gan = sum(v), 
+            cant1 = sum(c1), 
+            cant2=sum(c2)) %>% 
+  arrange(desc(V1)) %>% 
+  mutate(gan2 = cumsum(gan), quedan = cumsum(cant2), sevan = cumsum(cant1) ) %>% 
+  filter(V1 >= 0.025) %>% filter(V1 == min(V1))
+
+# filter(gan2 == max(gan2))
+
+head(d2,100)
+```
+

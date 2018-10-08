@@ -1,0 +1,375 @@
+---
+title: "Primer paso: Decision Tree"
+author: "Alejandro Bolaños"
+date: "2018-08-03"
+version: 0.7
+output: 
+  html_document:
+    theme: spacelab
+    highlight: monochrome
+    df_print: paged
+#    toc: true
+#    toc_depth: 2
+
+vignette: >
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+> “We don't want to focus on the trees (or their leaves) at the expense of the forest.” 
+> --- Douglas R. Hofstadter
+
+En este apartado repasaremos concepto ya aprendidos en materias anterior y los aplicaremos en nuestro problema. 
+
+Para refrescar el funcionamiento de los árboles de decisión, miremos el sitio [R2D3](http://www.r2d3.us/), los apartados:
+
+* [Part 1: A Decision Tree](http://www.r2d3.us/visual-intro-to-machine-learning-part-1/)
+* [Part 2: Bias and Variance](http://www.r2d3.us/visual-intro-to-machine-learning-part-2/)
+
+#### Preguntas
+
+- ¿Recuerda la proporción de `BAJA+2` presente?
+- ¿En que puede afectar este desbalanceo al algoritmo?
+
+
+```{r setup , echo=TRUE, results='hide'}
+
+# Iniciamos el entorno
+
+knitr::opts_knit$set(root.dir = 'C:/Users/saralb/Desktop/UBA/DropBox/UBA2018_20180803')
+rm( list=ls() )
+gc()
+```
+
+Empecemos trabajando con el primer árbol y veamos la salida del mismo. Empezamos a trabajar sobre el mes de `Febrero` (recordando de la clase anterior, que el mismo presentaba sus anomalías)
+
+```{r}
+library( "data.table" )
+febrero  <-  fread("datasets/201802.txt", header=TRUE, sep="\t")
+
+library(rpart)
+library( "rpart.plot" )
+
+modelo   <-  rpart( clase_ternaria ~ .,   data = febrero,   cp=0.005,  xval=0 )
+```
+
+Veamos como decidió el algoritmo cada rama. calcule la ganancia que tiene cada rama. Recuerde 11700 por cada `BAJA+2` y -300 por el resto. Comparando con la clase seleccionada por el algoritmo: ¿Nos es útil para nuestro problema?. Mire con detenimiento las probabilidades y vea si a través de este valor podemos seleccionar mejor los clientes que tienen mayor propensión al churn.
+
+```{r}
+summary(modelo)
+```
+Si tomamos este nodo terminal de ejemplo:
+
+```
+Node number 17: 152 observations
+  predicted class=CONTINUA  expected loss=0.4934211  P(node) =0.0006499949
+    class counts:    37    38    77
+   probabilities: 0.243 0.250 0.507 
+```
+Vemos que 38*11700 - (77+37)*300 = 410400. Es sin dudas un nodo que nos genera ganancia, pero que el árbol nos clasificó como `CONTINUA`.
+
+Viendo las probabilidades, quizás tengamos alguna alternativa mejor para poder elegir mejor mis clases.
+
+Para esto vamos a calcular las probabilidades de que cada individuo sea `BAJA+2`. Primero disminuimos el parámetro `cp` para obtener una mayor cantidad de nodos terminales y obtener más granularidad en nuestras probabilidades.
+
+```{r}
+
+modelo   <-  rpart( clase_ternaria ~ .,   data = febrero,   cp=0,  xval=0 )
+
+pred  <- predict( modelo, febrero , type = "prob")
+pred <- as.data.frame(pred)
+pred$clase_verdadera <- febrero$clase_ternaria
+
+head(pred)
+```
+
+Graficamos para darnos una idea sobre la distribución de las probabilidades
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+ds <- as.data.frame(pred) %>% gather(clase, valor, `BAJA+1`, `BAJA+2`, CONTINUA, - clase_verdadera)
+
+ds %>% group_by(clase) %>% summarise(min=min(valor), max=max(valor), media=mean(valor))
+
+ggplot(ds, aes(x=valor)) +
+    facet_grid(vars(clase), scales = "free_y") +
+     geom_density()
+
+ggplot(ds, aes(x=valor)) +
+    facet_grid(vars(clase), vars(clase_verdadera), scales = "free_y") +
+     geom_density()
+
+```
+
+¿Qué interpreta de estos valor?
+
+Definimos `punto de corte` a la probabilidad mínima que tiene que tener un elemento sobre esa clase para considerarla de la misma.
+
+Con esta definición y las probabilidades obtenidas, nos planteamos evaluar cuál debe ser nuestro punto de corte.
+
+Calculemos para diferentes puntos de corte cual es la ganancia:
+
+```{r}
+fganancia = function( probs, clases,  pcorte ) {
+  return(sum(
+    (probs >= pcorte) * ifelse( clases== "BAJA+2", 11700, -300 ))
+  )
+}
+
+# Obtenemos todas las probabilidades distintas de 
+puntos_corte <- sort(unique(pred$`BAJA+2`))
+
+ganancia <- sapply(puntos_corte, fganancia, probs=pred$`BAJA+2`, clases=pred$clase_verdadera)
+
+ds2 <- as.data.frame(cbind(puntos_corte, ganancia))
+
+ggplot(ds2, aes(x=puntos_corte,y=ganancia)) +
+     geom_line(size=1)
+
+```
+
+![Zoom por favor](https://i.imgflip.com/17bdt9.jpg)
+
+```{r}
+max_ganancia <- max(ds2$ganancia)
+
+max_punto_corte <- ds2[ which(ds2$ganancia ==  max_ganancia), 1]
+
+
+l <- paste("La máxima ganancia es" , max_ganancia , "en el punto de corte" , max_punto_corte)
+
+ggplot(ds2, aes(x=puntos_corte,y=ganancia)) +
+    geom_line(size=1) + 
+    xlim(c(0.0045,0.3)) + 
+    ylim(c(-1000,6000000)) + 
+    geom_hline(yintercept = 0, linetype="dashed", color="red") +
+    geom_vline(xintercept = max_punto_corte) +
+    geom_point(x=max_punto_corte, y=max_ganancia, size=2, color="red") +
+    # annotate("text",x=0.01,y=100000, label = c(l))
+  annotate("text",x=0.18,y=1000000,label=l)
+
+```
+
+Con este análisis y con algo de respaldo teórico, vamos a tomar como `punto de corte` 0.025.
+
+Existen más formas de medir la calidad del modelo a través de las probabilidades que nos entrega. A nivel global podemos usar `AUC` (área bajo la curva ROC), que nos muestra el comportamiento global de la performance del modelo. Es necesario para trabajar con la curva ROC que la clase que estamos clasificando sea binaria, para esto, agruparemos las clases `BAJA+1` y `CONTINUA` 
+
+```{r}
+library( "ROCR" )
+
+binaria  <-  as.numeric( pred$clase_verdadera == "BAJA+2")
+roc_pred <- ROCR::prediction(  pred$`BAJA+2`, binaria, label.ordering=c( 0, 1))
+auc  <-  ROCR::performance( roc_pred,"auc");
+roc <- ROCR::performance(roc_pred,"tpr","fpr")
+plotdat <- data.frame(fpr=roc@x.values[[1]],tpr=roc@y.values[[1]],CUT=roc@alpha.values[[1]],POINT=NA)
+
+ggplot(plotdat, aes(x=fpr,y=tpr)) + 
+  geom_abline(intercept=0,slope=1) +
+  geom_line(lwd=1) + 
+  geom_vline(xintercept = max_punto_corte, linetype="dotted") +
+  annotate("text",x=0.97,y=0.15,label=paste("AUC=",round(auc@y.values[[1]],digits=2),sep=""),hjust=1)
+
+```
+
+Las otras métricas que existen y desarrollaremos más adelante son: Gini, KS, Lift, Captura, etc.
+
+> “If you torture the data long enough, it will confess.” --- Ronald Coase
+
+Como vimos en el repaso sobre árboles de decisión, es importante para no sobreajustar es utilizar una muestra de validación. Haremos foco en dos tipos de muestras:
+
+* *Out of Sample* (OOS)
+* *Out of Time* (OOT) 
+
+Empecemos con OOS, definimos una `semilla` para poder reproducir las pruebas y obtener los mismos resultados.
+
+```{r}
+library(caret)
+semilla <- 102191
+set.seed(semilla)
+inTraining <- createDataPartition( febrero[, get("clase_ternaria")], p = 0.70, list = FALSE)
+febrero_training  <-  febrero[  inTraining, ]
+febrero_testing   <-  febrero[ -inTraining, ]
+```
+
+Nuevamente generamos un modelo, pero ahora solo para el entrenamiento, aplicamos el modelo en el conjunto de validación
+
+```{r}
+modelo_oos <- rpart(clase_ternaria ~ ., data = febrero_training,   cp=0.0,  xval=0 )
+
+pred_training <- predict(modelo_oos, febrero_training , type = "prob")
+pred_testing <- predict(modelo_oos, febrero_testing , type = "prob")
+
+```
+
+Para simplificar nuestro trabajo vamos a definir una función que nos calcule las métricas de nuestro modelo (podremos ampliar la misma más adelante para incluir nuevas)
+
+```{r}
+fmetricas <- function(probs, clases, cutoff=0.025, proporcion=1, label="", type="", semilla=NA) {
+  
+  # AUC
+  binaria  <-  as.numeric(clases == "BAJA+2")
+  roc_pred <-  ROCR::prediction(probs, binaria, label.ordering=c( 0, 1))
+  auc_t <-  ROCR::performance( roc_pred,"auc"); 
+  auc <- unlist(auc_t@y.values)
+  
+  # Ganancia
+  ganancia <- sum((probs > cutoff  ) * ifelse( clases== "BAJA+2", 11700, -300 )) 
+  
+  # Ganancia normalizada, proyectamos la ganancia según el porcentaje de la muestra.
+  ganancia_normalizada <- ganancia / proporcion
+  
+  return(data.frame(label, semilla, type, ganancia, ganancia_normalizada, auc))
+}
+
+```
+
+- ¿Qué otras métricas, simples y complejas, le puede ayudar para entender y _comparar_ los modelos?
+
+Y aplicamos las métricas sobre ambos conjuntos de datos:
+
+```{r}
+comparacion = rbind(
+  fmetricas(pred_training[,c("BAJA+2")], febrero_training$clase_ternaria,proporcion = 0.7, type = "training", label="febrero", semilla=semilla),
+  fmetricas(pred_testing[,c("BAJA+2")], febrero_testing$clase_ternaria,proporcion = 0.3, type = "testing",  label="febrero", semilla=semilla)
+)
+comparacion
+```
+
+- ¿ Qué fenómeno observamos entre train y test?
+
+Antes de alejarnos del OOS, cuestionemos:
+
+En términos biológicos, de dos semillas obtenemos dos árboles parecidos pero no iguales. ¿Sucederá lo mismo en nuestros modelos? No hay más de probar...
+
+```{r}
+semillas <- c( 102191, 200177, 410551, 552581, 892237 )
+resultados <- data.frame()
+
+for( s in  semillas ) {
+
+    set.seed( s )
+    inTraining <- createDataPartition( febrero[, get("clase_ternaria")], p = 0.70, list = FALSE)
+    febrero_training  <-  febrero[  inTraining, ]
+    febrero_testing   <-  febrero[ -inTraining, ]
+    
+    modelo_oos <- rpart(clase_ternaria ~ ., data = febrero_training,   cp=0.0,  xval=0 )
+    
+    pred_training <- predict(modelo_oos, febrero_training , type = "prob")
+    pred_testing <- predict(modelo_oos, febrero_testing , type = "prob")
+    
+    resultados <- rbind(resultados,
+      fmetricas(pred_training[,c("BAJA+2")], febrero_training$clase_ternaria,proporcion = 0.7, type = "training", label="febrero", semilla=s),
+      fmetricas(pred_testing[,c("BAJA+2")], febrero_testing$clase_ternaria,proporcion = 0.3, type = "testing",  label="febrero", semilla=s)
+    )
+}
+
+resultados
+
+resultados %>% filter(type == "testing") %>% arrange(desc(ganancia_normalizada))
+```
+
+Vemos dos importantes fenómenos, el primero es la gran variación de resultados producto de cambiar de semilla!. Además nos damos cuenta que la métrica `AUC` y `GANANCIA` no van de la mano. ¿Por qué?
+
+- ¿Qué debemos hacer? 
+- ¿Elegir la mejor semilla? 
+- ¿Llorar y plantearnos nuestro lugar en el mundo? 
+- ¿Se puede conseguir métricas de mayor confianza frente a este panorama?
+
+Podemos consolidar los resultados simplemente obteniendo sus medias y desvíos.
+
+```{r}
+resultados %>% 
+  group_by(label, type) %>% 
+  select(label, type, auc, ganancia_normalizada) %>%
+  summarise_all(funs(mean,sd))
+```
+
+
+> An economist is an expert who will know tomorrow why the things he predicted yesterday didn't happen today. --- LAURENCE J. PETER
+
+
+Concluiremos esta parte con el último caso del muestreo, *OOT*. A mi entender es el más importante, ya que es el que nos brinda más tranquilidad de que el modelo va a ser robusto en las ejecuciones de los siguientes meses que aún no transcurrieron.
+
+Para lo mismo debemos contemplar que no haya variables del tipo `DATE` o `DATETIME`. ¿Por qué? ¿Afectan estás variables en la performance de un OOS?
+
+Para transformar las variables, el profesor creo un script  `codigoR\FeatureEngineering\fe_presente.r` que nos automatiza el trabajo. _Mirar detenidamente el script y comprenderlo, hacerlo propio._
+
+Ya con los datos transformados vamos añadir un conjunto de datos más para nuestro análisis y validación: `ABRIL`. Seguiremos trabajando con `Febrero` para medir la calidad del modelo con 5 particiones aleatoreas y luego lo entrenaremos con el conjunto total de datos, para aplicar el mismo en el conjunto de datos `OOS` 
+
+Sumaremos en las métricas la capacidad de determinar el punto de corte en función de los conjuntos de validación.
+
+```{r}
+febrero  <-  fread("datasets/dias/201802_dias.txt", header=TRUE, sep="\t")
+abril <-  fread("datasets/dias/201804_dias.txt", header=TRUE, sep="\t")
+
+semillas <- c( 102191, 200177, 410551, 552581, 892237 )
+resultados <- data.frame()
+
+fmetricas2 <- function(probs, clases, cutoff=0.025, proporcion=1, label="", type="", semilla=NA) {
+  
+  # AUC
+  binaria  <-  as.numeric(clases == "BAJA+2")
+  roc_pred <-  ROCR::prediction(probs, binaria, label.ordering=c( 0, 1))
+  auc_t <-  ROCR::performance( roc_pred,"auc"); 
+  auc <- unlist(auc_t@y.values)
+  
+  # Ganancia
+  ganancia <- sum((probs > cutoff  ) * ifelse( clases== "BAJA+2", 11700, -300 )) 
+  
+  # Ganancia normalizada, proyectamos la ganancia según el porcentaje de la muestra.
+  ganancia_normalizada <- ganancia / proporcion
+
+  # Calcular nuevo punto de corte
+  puntos_corte <- sort(unique(probs))
+  ganancia_all <- sapply(puntos_corte, fganancia, probs=probs, clases=clases)
+  ds2 <- as.data.frame(cbind(puntos_corte, ganancia_all))
+  max_punto_corte <- ds2[ which(ds2$ganancia_all ==  max(ds2$ganancia_all)), 1] 
+
+  return(data.frame(label, semilla, type, ganancia, ganancia_normalizada, auc, max_punto_corte))
+}
+      
+for( s in  semillas ) {
+
+    set.seed( s )
+    inTraining <- createDataPartition( febrero[, get("clase_ternaria")], p = 0.70, list = FALSE)
+    febrero_training  <-  febrero[  inTraining, ]
+    febrero_testing   <-  febrero[ -inTraining, ]
+    
+    modelo_oot <- rpart(clase_ternaria ~ ., data = febrero_training,   cp=0.0,  xval=0 )
+    
+    pred_training <- predict(modelo_oot, febrero_training , type = "prob")
+    pred_testing <- predict(modelo_oot, febrero_testing , type = "prob")
+    
+    resultados <- rbind(resultados,
+      fmetricas2(pred_training[,c("BAJA+2")], febrero_training$clase_ternaria,proporcion = 0.7, type = "training", label="febrero", semilla=s),
+      fmetricas2(pred_testing[,c("BAJA+2")], febrero_testing$clase_ternaria,proporcion = 0.3, type = "testing",  label="febrero", semilla=s)
+    )
+}
+
+resultados
+
+```
+```{r}
+resultados %>% 
+  group_by(label, type) %>% 
+  select(label, type, auc, ganancia_normalizada, max_punto_corte) %>%
+  summarise_all(funs(mean,sd))
+```
+
+Y ahora modelamos con todos los datos y los aplicamos a `Abril`
+```{r}
+modelo_oot <- rpart(clase_ternaria ~ ., data = febrero,   cp=0.0,  xval=0 )
+abril_pred <- predict(modelo_oot, abril , type = "prob")
+    
+rbind(
+  fmetricas2(abril_pred[,c("BAJA+2")], abril$clase_ternaria,proporcion = 1, type = "testing", label="abril_con_cutoff", cutoff = 0.02118741),
+  fmetricas2(abril_pred[,c("BAJA+2")], abril$clase_ternaria,proporcion = 1, type = "testing", label="abril_sin_cutoff")
+)
+
+```
+
+- ¿Los estadísticos son cercanos a las métricas de testing de `Febrero`?
+- ¿Ayudó cambiar el punto de corte para obtener más ganancia?
+- ¿Qué tan cerca estuvo del mejor punto de corte posible? Sugiera alternativas para mejorar el acercamiento para el punto de corte.
